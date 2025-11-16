@@ -9,13 +9,14 @@ export interface Cell {
   consumeTime?: number // For yellow fade effect
   beingId?: string // ID of the Being this cell belongs to
   isBeingCenter?: boolean // True if this is the center cell of a Being
+  beingDistance?: number // Distance from Being center (for body cells)
 }
 
 export interface Being {
   id: string
   centerRow: number
   centerCol: number
-  bodyCells: { row: number; col: number }[]
+  bodyCells: { row: number; col: number; distance: number }[]
   value: number
   lastGrowthTime: number
   nextGrowthDelay: number

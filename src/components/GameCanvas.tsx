@@ -58,74 +58,128 @@ function GameCanvas() {
     }
     noiseValues.sort((a, b) => b.value - a.value)
     
-    // Create Beings with blob-shaped bodies
+    // Create Beings with blob-shaped bodies (ensuring they don't touch)
     const beings: Being[] = []
+    const occupiedCells = new Set<string>() // Track all Being body cells
+    
     for (let i = 0; i < CONFIG.BEINGS_COUNT; i++) {
-      const centerRow = noiseValues[i].row
-      const centerCol = noiseValues[i].col
-      const beingId = `being-${i}`
+      let attempts = 0
+      const maxAttempts = 10
+      let validBeing = false
       
-      // Generate blob-shaped body
-      const bodySize = CONFIG.BEING_BODY_MIN_SIZE + 
-        Math.floor(Math.random() * (CONFIG.BEING_BODY_MAX_SIZE - CONFIG.BEING_BODY_MIN_SIZE + 1))
-      
-      const bodyCells: { row: number; col: number }[] = [{ row: centerRow, col: centerCol }]
-      const candidates: { row: number; col: number }[] = [{ row: centerRow, col: centerCol }]
-      const visited = new Set<string>()
-      visited.add(`${centerRow},${centerCol}`)
-      
-      while (bodyCells.length < bodySize && candidates.length > 0) {
-        const idx = Math.floor(Math.random() * candidates.length)
-        const cell = candidates.splice(idx, 1)[0]
+      while (!validBeing && attempts < maxAttempts) {
+        const centerRow = noiseValues[i * maxAttempts + attempts].row
+        const centerCol = noiseValues[i * maxAttempts + attempts].col
+        const beingId = `being-${i}`
         
-        // Add adjacent cells as candidates
-        const adjacent = [
-          { row: cell.row - 1, col: cell.col },
-          { row: cell.row + 1, col: cell.col },
-          { row: cell.row, col: cell.col - 1 },
-          { row: cell.row, col: cell.col + 1 }
-        ]
+        // Generate solid blob-shaped body (deterministic, no gaps)
+        const bodySize = CONFIG.BEING_BODY_MIN_SIZE + 
+          Math.floor(noise[centerRow][centerCol] * (CONFIG.BEING_BODY_MAX_SIZE - CONFIG.BEING_BODY_MIN_SIZE + 1))
         
-        for (const adj of adjacent) {
-          const key = `${adj.row},${adj.col}`
-          if (!visited.has(key) && 
-              adj.row >= 0 && adj.row < CONFIG.GRID_ROWS &&
-              adj.col >= 0 && adj.col < CONFIG.GRID_COLS &&
-              grid[adj.row][adj.col].type === 'empty') {
-            visited.add(key)
-            if (Math.random() < 0.6 && bodyCells.length < bodySize) {
-              bodyCells.push(adj)
-              candidates.push(adj)
+        // Create solid blob by taking all cells within a certain distance
+        // Use a slightly random radius based on noise to create organic shapes
+        // Increased thickness with larger search radius
+        const baseRadius = Math.sqrt(bodySize / Math.PI) * 1.15 // +15% thickness
+        
+        const potentialCells: { row: number; col: number; distance: number }[] = []
+        
+        for (let dr = -Math.ceil(baseRadius * 1.6); dr <= Math.ceil(baseRadius * 1.6); dr++) {
+          for (let dc = -Math.ceil(baseRadius * 1.6); dc <= Math.ceil(baseRadius * 1.6); dc++) {
+            const row = centerRow + dr
+            const col = centerCol + dc
+            const distance = Math.sqrt(dr * dr + dc * dc)
+            
+            if (row >= 0 && row < CONFIG.GRID_ROWS &&
+                col >= 0 && col < CONFIG.GRID_COLS) {
+              
+              // Create organic blob shape: vary radius based on angle and noise
+              const angle = Math.atan2(dr, dc)
+              const angleNoise = (noise[row][col] - 0.5) * 0.35 // Increased variation
+              const radiusAtAngle = baseRadius * (1 + Math.sin(angle * 3) * 0.25 + angleNoise)
+              
+              // Include all cells within this organic radius for solid blob
+              if (distance <= radiusAtAngle) {
+                potentialCells.push({ row, col, distance })
+              }
             }
           }
         }
-      }
-      
-      // Create Being
-      const digits = 7 + Math.floor(noise[centerRow][centerCol] * 4)
-      const value = Math.floor(Math.pow(10, digits - 1) + noise[centerRow][centerCol] * Math.pow(10, digits - 1) * 9)
-      
-      beings.push({
-        id: beingId,
-        centerRow,
-        centerCol,
-        bodyCells,
-        value,
-        lastGrowthTime: 0,
-        nextGrowthDelay: CONFIG.BEING_GROWTH_MIN_INTERVAL + 
-          Math.random() * (CONFIG.BEING_GROWTH_MAX_INTERVAL - CONFIG.BEING_GROWTH_MIN_INTERVAL)
-      })
-      
-      // Mark body cells in grid
-      bodyCells.forEach(cell => {
-        grid[cell.row][cell.col] = {
-          type: 'being',
-          value,
-          baseValue: value,
-          beingId,
-          isBeingCenter: cell.row === centerRow && cell.col === centerCol
+        
+        // Sort by distance and take exact bodySize (creates solid blob)
+        potentialCells.sort((a, b) => a.distance - b.distance)
+        const bodyCells = potentialCells.slice(0, Math.min(bodySize, potentialCells.length))
+        
+        // Check if this Being would touch any existing Being (including adjacency)
+        let wouldTouch = false
+        for (const cell of bodyCells) {
+          // Check cell itself and all adjacent cells
+          const checkPositions = [
+            { row: cell.row, col: cell.col },
+            { row: cell.row - 1, col: cell.col },
+            { row: cell.row + 1, col: cell.col },
+            { row: cell.row, col: cell.col - 1 },
+            { row: cell.row, col: cell.col + 1 },
+          ]
+          
+          for (const pos of checkPositions) {
+            if (occupiedCells.has(`${pos.row},${pos.col}`)) {
+              wouldTouch = true
+              break
+            }
+          }
+          if (wouldTouch) break
         }
-      })
+        
+        if (!wouldTouch && bodyCells.length > 0) {
+          validBeing = true
+          
+          // Mark all body cells as occupied
+          bodyCells.forEach(cell => {
+            occupiedCells.add(`${cell.row},${cell.col}`)
+          })
+          
+          // Create Being with center value
+          const digits = 7 + Math.floor(noise[centerRow][centerCol] * 4)
+          const centerValue = Math.floor(Math.pow(10, digits - 1) + noise[centerRow][centerCol] * Math.pow(10, digits - 1) * 9)
+          
+          // Calculate max distance for normalization
+          const maxDistance = bodyCells.length > 0 ? bodyCells[bodyCells.length - 1].distance : 1
+          
+          beings.push({
+            id: beingId,
+            centerRow,
+            centerCol,
+            bodyCells,
+            value: centerValue,
+            lastGrowthTime: 0,
+            nextGrowthDelay: CONFIG.BEING_GROWTH_MIN_INTERVAL + 
+              noise[centerRow][centerCol] * (CONFIG.BEING_GROWTH_MAX_INTERVAL - CONFIG.BEING_GROWTH_MIN_INTERVAL)
+          })
+          
+          // Mark body cells in grid with gradient values
+          const medianEmptyValue = (CONFIG.EMPTY_MIN_VALUE + CONFIG.EMPTY_MAX_VALUE) / 2
+          
+          bodyCells.forEach(cell => {
+            const isCenter = cell.row === centerRow && cell.col === centerCol
+            
+            // Calculate cell value based on distance (center = centerValue, edge = medianEmptyValue)
+            const distanceRatio = cell.distance / maxDistance
+            const cellValue = isCenter ? centerValue : 
+              Math.floor(centerValue - (centerValue - medianEmptyValue) * distanceRatio)
+            
+            grid[cell.row][cell.col] = {
+              type: 'being',
+              value: cellValue,
+              baseValue: cellValue,
+              beingId,
+              isBeingCenter: isCenter,
+              beingDistance: cell.distance
+            }
+          })
+        }
+        
+        attempts++
+      }
     }
     
     beingsRef.current = beings
@@ -134,6 +188,9 @@ function GameCanvas() {
 
   // Color gradient cache
   const colorCacheRef = useRef<Map<number, string>>(new Map())
+  
+  // Being color cache - maps beingId to maxDistance for faster lookups
+  const beingColorCacheRef = useRef<Map<string, number>>(new Map())
   
   const getColorForCell = useCallback((cell: Cell, displayValue: number, isHovered: boolean, payloadValue: number, timestamp: number): string => {
     if (payloadValue > 0) {
@@ -154,6 +211,48 @@ function GameCanvas() {
         const b = Math.floor(CONFIG.COLOR_BEING_FADE_B + (CONFIG.COLOR_BEING_B - CONFIG.COLOR_BEING_FADE_B) * fadeProgress)
         return `rgb(${r}, ${g}, ${b})`
       }
+      
+      // Gradient from center (orange) to edge based on BOTH distance and value
+      if (cell.beingDistance !== undefined && !cell.isBeingCenter && cell.beingId) {
+        // Use cached maxDistance to avoid expensive find() calls
+        let maxDistance = beingColorCacheRef.current.get(cell.beingId)
+        if (maxDistance === undefined) {
+          const being = beingsRef.current.find(b => b.id === cell.beingId)
+          if (being && being.bodyCells.length > 0) {
+            maxDistance = being.bodyCells[being.bodyCells.length - 1].distance
+            beingColorCacheRef.current.set(cell.beingId, maxDistance)
+          }
+        }
+        
+        if (maxDistance !== undefined) {
+          const distanceRatio = cell.beingDistance / maxDistance
+          
+          // Calculate value-based variation (cells with different values have different colors)
+          // Normalize displayValue relative to the Being's value range
+          const medianEmptyValue = (CONFIG.EMPTY_MIN_VALUE + CONFIG.EMPTY_MAX_VALUE) / 2
+          const valueRange = cell.baseValue - medianEmptyValue
+          const maxValueRange = Math.max(100000, cell.baseValue) // Approximate max value for normalization
+          const valueRatio = Math.min(1, valueRange / maxValueRange)
+          
+          // Combine distance and value for color variation
+          // Distance controls overall brightness, value adds local variation
+          const colorFactor = distanceRatio * 0.7 + valueRatio * 0.3
+          
+          // Brighter target color (more orange, less gray) for better visibility
+          // Instead of gray, use a warm orange-brown as the edge color
+          const edgeR = 180  // Brighter, more orange than gray
+          const edgeG = 110  // Warmer tone
+          const edgeB = 60   // Keeps orange hue
+          
+          const r = Math.floor(CONFIG.COLOR_BEING_R - (CONFIG.COLOR_BEING_R - edgeR) * colorFactor)
+          const g = Math.floor(CONFIG.COLOR_BEING_G - (CONFIG.COLOR_BEING_G - edgeG) * colorFactor)
+          const b = Math.floor(CONFIG.COLOR_BEING_B - (CONFIG.COLOR_BEING_B - edgeB) * colorFactor)
+          
+          return `rgb(${r}, ${g}, ${b})`
+        }
+      }
+      
+      // Center cell gets full orange
       return `rgb(${CONFIG.COLOR_BEING_R}, ${CONFIG.COLOR_BEING_G}, ${CONFIG.COLOR_BEING_B})`
     } else {
       if (isHovered) {
@@ -201,6 +300,35 @@ function GameCanvas() {
     }
   }, [])
   
+  const spawnRandomPayloads = useCallback(() => {
+    if (!gridRef.current) return
+    
+    // Randomly spawn single-cell payloads from the right edge
+    if (Math.random() < CONFIG.RANDOM_PAYLOAD_PROBABILITY) {
+      const randomRow = Math.floor(Math.random() * CONFIG.GRID_ROWS)
+      const col = CONFIG.GRID_COLS - 1 // Rightmost column
+      
+      // Check if cell is empty and no payload exists there
+      const cell = gridRef.current[randomRow][col]
+      const hasPayload = payloadsRef.current.some(p => 
+        p.row === randomRow && Math.floor(p.targetCol) === col
+      )
+      
+      if (cell.type === 'empty' && !hasPayload) {
+        const value = CONFIG.RANDOM_PAYLOAD_MIN_VALUE + 
+          Math.floor(Math.random() * (CONFIG.RANDOM_PAYLOAD_MAX_VALUE - CONFIG.RANDOM_PAYLOAD_MIN_VALUE + 1))
+        
+        payloadsRef.current.push({
+          row: randomRow,
+          col,
+          targetCol: col,
+          value,
+          centerValue: value
+        })
+      }
+    }
+  }, [])
+
   const updatePayloads = useCallback((timestamp: number) => {
     if (!gridRef.current) return
     
@@ -302,29 +430,36 @@ function GameCanvas() {
   const updateBeings = useCallback((timestamp: number) => {
     if (!gridRef.current) return
     
-    for (let row = 0; row < CONFIG.GRID_ROWS; row++) {
-      for (let col = 0; col < CONFIG.GRID_COLS; col++) {
-        const cell = gridRef.current[row][col]
+    beingsRef.current.forEach(being => {
+      if (timestamp - being.lastGrowthTime >= being.nextGrowthDelay) {
+        // Determine growth points (more likely to be 0)
+        const rand = Math.random()
+        const noGrowthChance = CONFIG.BEING_NO_GROWTH_WEIGHT / (CONFIG.BEING_NO_GROWTH_WEIGHT + CONFIG.BEING_GROWTH_MAX_POINTS)
         
-        if (cell.type === 'being' && cell.lastGrowthTime !== undefined) {
-          if (timestamp - cell.lastGrowthTime >= cell.nextGrowthDelay!) {
-            // Determine growth points (more likely to be 0)
-            const rand = Math.random()
-            const noGrowthChance = CONFIG.BEING_NO_GROWTH_WEIGHT / (CONFIG.BEING_NO_GROWTH_WEIGHT + CONFIG.BEING_GROWTH_MAX_POINTS)
-            
-            let points = 0
-            if (rand > noGrowthChance) {
-              points = 1 + Math.floor(Math.random() * CONFIG.BEING_GROWTH_MAX_POINTS)
-            }
-            
-            cell.value = Math.min(cell.value + points, CONFIG.BEING_MAX_VALUE)
-            cell.lastGrowthTime = timestamp
-            cell.nextGrowthDelay = CONFIG.BEING_GROWTH_MIN_INTERVAL + 
-              Math.random() * (CONFIG.BEING_GROWTH_MAX_INTERVAL - CONFIG.BEING_GROWTH_MIN_INTERVAL)
-          }
+        let points = 0
+        if (rand > noGrowthChance) {
+          points = 1 + Math.floor(Math.random() * CONFIG.BEING_GROWTH_MAX_POINTS)
         }
+        
+        being.value = Math.min(being.value + points, CONFIG.BEING_MAX_VALUE)
+        being.lastGrowthTime = timestamp
+        being.nextGrowthDelay = CONFIG.BEING_GROWTH_MIN_INTERVAL + 
+          Math.random() * (CONFIG.BEING_GROWTH_MAX_INTERVAL - CONFIG.BEING_GROWTH_MIN_INTERVAL)
+        
+        // Update all body cells proportionally
+        const maxDistance = being.bodyCells.length > 0 ? being.bodyCells[being.bodyCells.length - 1].distance : 1
+        const medianEmptyValue = (CONFIG.EMPTY_MIN_VALUE + CONFIG.EMPTY_MAX_VALUE) / 2
+        
+        being.bodyCells.forEach(bc => {
+          const isCenter = bc.row === being.centerRow && bc.col === being.centerCol
+          const distanceRatio = bc.distance / maxDistance
+          const cellValue = isCenter ? being.value : 
+            Math.floor(being.value - (being.value - medianEmptyValue) * distanceRatio)
+          
+          gridRef.current![bc.row][bc.col].value = cellValue
+        })
       }
-    }
+    })
   }, [])
 
   const renderGrid = useCallback((ctx: CanvasRenderingContext2D, timestamp: number) => {
@@ -360,6 +495,7 @@ function GameCanvas() {
         
         // Check if payload is on this cell
         const hasPayload = payloadMap.has(`${row},${col}`)
+        let payloadValue = 0
         
         // Calculate display value
         let displayValue = cell.baseValue
@@ -369,6 +505,7 @@ function GameCanvas() {
           const payload = payloadsRef.current.find(p => p.row === row && Math.floor(p.targetCol) === col)
           if (payload) {
             displayValue += payload.value
+            payloadValue = payload.value
           }
         }
         
@@ -393,7 +530,7 @@ function GameCanvas() {
         const isHovered = (col === hoveredCol && row === hoveredRow && cell.type === 'empty')
         
         // Get color (uses cache)
-        const color = getColorForCell(cell, displayValue, isHovered, hasPayload, timestamp)
+        const color = getColorForCell(cell, displayValue, isHovered, payloadValue, timestamp)
         
         // Batch by color
         if (!renderBatches.has(color)) {
@@ -402,9 +539,19 @@ function GameCanvas() {
         
         const x = col * CONFIG.CELL_WIDTH + CONFIG.CELL_WIDTH / 2
         const y = row * CONFIG.CELL_HEIGHT + CONFIG.CELL_HEIGHT / 2
-        const paddedValue = displayValue.toString().padStart(2, '0')
         
-        renderBatches.get(color)!.push({ x, y, text: `[${paddedValue}]` })
+        // Format text: body cells show only 2 digits + dot, others show full padded value
+        let text: string
+        if (cell.type === 'being' && !cell.isBeingCenter && displayValue >= 100) {
+          // Body cells: show first 2 digits + dot
+          const firstTwo = displayValue.toString().substring(0, 2)
+          text = `[${firstTwo}.]`
+        } else {
+          const paddedValue = displayValue.toString().padStart(2, '0')
+          text = `[${paddedValue}]`
+        }
+        
+        renderBatches.get(color)!.push({ x, y, text })
       }
     }
     
@@ -491,11 +638,11 @@ function GameCanvas() {
       const clickRow = Math.floor(y / CONFIG.CELL_HEIGHT)
       
       if (clickCol >= 0 && clickCol < CONFIG.GRID_COLS && clickRow >= 0 && clickRow < CONFIG.GRID_ROWS) {
-        // Create blob of payloads (1-10 cells)
+        // Create round blob of payloads (1-10 cells) with gradient values
         const blobSize = CONFIG.PAYLOAD_BLOB_MIN_SIZE + 
           Math.floor(Math.random() * (CONFIG.PAYLOAD_BLOB_MAX_SIZE - CONFIG.PAYLOAD_BLOB_MIN_SIZE + 1))
         
-        const value = CONFIG.PAYLOAD_MIN_VALUE + 
+        const centerValue = CONFIG.PAYLOAD_MIN_VALUE + 
           Math.floor(Math.random() * (CONFIG.PAYLOAD_MAX_VALUE - CONFIG.PAYLOAD_MIN_VALUE + 1))
         
         // Create set of existing payload positions
@@ -504,49 +651,52 @@ function GameCanvas() {
           existingPayloads.add(`${p.row},${Math.floor(p.targetCol)}`)
         })
         
-        // Start with clicked cell and grow blob
-        const blobCells: { row: number; col: number }[] = []
-        const candidates: { row: number; col: number }[] = [{ row: clickRow, col: clickCol }]
-        const visited = new Set<string>()
+        // Use distance-based round blob generation
+        // First, collect all valid cells within radius
+        const blobCells: { row: number; col: number; distance: number }[] = []
+        const maxRadius = Math.ceil(Math.sqrt(blobSize / Math.PI) * 1.5) // Approximate radius
         
-        while (blobCells.length < blobSize && candidates.length > 0) {
-          const idx = Math.floor(Math.random() * candidates.length)
-          const cell = candidates.splice(idx, 1)[0]
-          const key = `${cell.row},${cell.col}`
-          
-          if (visited.has(key)) continue
-          visited.add(key)
-          
-          // Check if cell is valid for payload
-          if (cell.row >= 0 && cell.row < CONFIG.GRID_ROWS && 
-              cell.col >= 0 && cell.col < CONFIG.GRID_COLS) {
-            const gridCell = gridRef.current[cell.row][cell.col]
+        for (let dr = -maxRadius; dr <= maxRadius; dr++) {
+          for (let dc = -maxRadius; dc <= maxRadius; dc++) {
+            const row = clickRow + dr
+            const col = clickCol + dc
+            const distance = Math.sqrt(dr * dr + dc * dc)
             
-            // Only add if cell is empty and no payload exists there
-            if (gridCell.type === 'empty' && !existingPayloads.has(key)) {
-              blobCells.push(cell)
-              existingPayloads.add(key) // Mark as occupied for this blob
+            if (row >= 0 && row < CONFIG.GRID_ROWS &&
+                col >= 0 && col < CONFIG.GRID_COLS &&
+                distance <= maxRadius) {
+              const key = `${row},${col}`
+              const gridCell = gridRef.current[row][col]
               
-              // Add adjacent cells as candidates
-              const adjacent = [
-                { row: cell.row - 1, col: cell.col },     // top
-                { row: cell.row + 1, col: cell.col },     // bottom
-                { row: cell.row, col: cell.col - 1 },     // left
-                { row: cell.row, col: cell.col + 1 },     // right
-              ]
-              candidates.push(...adjacent)
+              if (gridCell.type === 'empty' && !existingPayloads.has(key)) {
+                blobCells.push({ row, col, distance })
+              }
             }
           }
         }
         
-        // Create payloads for all cells in blob
-        blobCells.forEach(cell => {
+        // Sort by distance and take closest cells
+        blobCells.sort((a, b) => a.distance - b.distance)
+        const selectedCells = blobCells.slice(0, Math.min(blobSize, blobCells.length))
+        
+        // Calculate max distance for gradient
+        const maxDistance = selectedCells.length > 0 ? 
+          selectedCells[selectedCells.length - 1].distance : 1
+        
+        // Create payloads with gradient values (higher in center)
+        selectedCells.forEach(cell => {
+          // Gradient: center = 100%, edge = 30%
+          const t = cell.distance === 0 ? 1 : 1 - (cell.distance / maxDistance) * 0.7
+          const cellValue = Math.floor(centerValue * t)
+          
           payloadsRef.current.push({
             row: cell.row,
             col: cell.col,
             targetCol: cell.col,
-            value
+            value: cellValue,
+            centerValue
           })
+          existingPayloads.add(`${cell.row},${cell.col}`)
         })
       }
     }
@@ -586,6 +736,7 @@ function GameCanvas() {
       updateNoise()
       updateBeings(timestamp)
       updateEmptyCells()
+      spawnRandomPayloads()
       updatePayloads(timestamp)
 
       // Clear canvas with dark grey background
@@ -607,7 +758,7 @@ function GameCanvas() {
       canvas.removeEventListener('mouseleave', handleMouseLeave)
       canvas.removeEventListener('click', handleClick)
     }
-  }, [initializeGrid, renderGrid, renderUI, updateNoise, updateBeings, updateEmptyCells, updatePayloads])
+  }, [initializeGrid, renderGrid, renderUI, updateNoise, updateBeings, updateEmptyCells, spawnRandomPayloads, updatePayloads])
 
   return (
     <div className="canvas-container" ref={containerRef}>
