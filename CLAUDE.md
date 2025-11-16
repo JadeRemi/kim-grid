@@ -48,18 +48,32 @@ yarn test      # Run unit tests
 ## Game Mechanics
 
 ### Core Entities
-- **Beings**: Living entities occupying 8-18 cells in thick, blob-shaped bodies (100 per grid)
+- **Beings**: Living entities with highly varied appearances (100 per grid)
+  - **Size variety:** 1-20 cells (15% are single-cell, rest have asymmetric blob bodies)
   - **Never touch each other** - positioned with at least 1 cell gap between bodies
-  - Center cell displays full value (7-10 digits), body cells show abbreviated values (e.g. `[12.]`)
-  - **Gradient color based on both distance and value** - not uniform rings, varies by cell
+  - **Asymmetric, organic shapes** using multi-frequency noise for unique appearances
+  - Center cell displays full value (7-10 digits), body cells show abbreviated values (e.g. `[12345678]` → `[12.]`)
+  - **ALL body cells have HIGH values (7-10 digits range)**
+    - Body cells: 50-95% of center value based on distance
+    - ±20% variation per cell = no uniform rings
+    - Edge cells still have millions/hundreds of thousands in value
+  - **Gradient color with darker edges**
     - Center: full orange `rgb(255, 146, 29)`
-    - Edges: warm orange-brown `rgb(180, 110, 60)` for visibility
-    - Color factor: 70% distance from center + 30% cell value variation
-  - Gradient values from center to edges (median empty cell value)
-  - Orange color at center, grows over time (0-9 points every 1-10 seconds)
-  - Yellow fade effect for 5 seconds after consuming a Payload (all body cells)
+    - Edges: dark brown-orange `rgb(110, 60, 30)` for strong contrast
+    - Color based on distance + value variation
+  - **Center value only grows, never decreases:**
+    - Natural growth: 0-9 points every 1-10 seconds (more likely to get 0)
+    - Payload consumption: adds full payload value to center
+    - Max value: 10 digits (9,999,999,999)
+  - **Proportional yellow fade effect** for 5 seconds after consuming a Payload
+    - Each body cell lightens towards yellow based on its own base color
+    - Darker edge cells → darker yellow glow
+    - Brighter center cells → brighter yellow glow
+    - Maintains the gradient structure while showing consumption
   - Consume Payloads when touching any body cell
-  - Release 1-3 split Payloads (30% of original value) to adjacent empty cells (not to the right)
+    - **Immediately adds payload value to Being's center**
+    - Updates all body cells proportionally
+  - Release 1-3 split Payloads (30% of original payload) to adjacent empty cells (not to the right)
   - Bodies are solid, rounded blobs with no gaps (mountain-like shape)
 
 - **Empty Cells**: Regular cells with values 00-09, dark grey
@@ -86,9 +100,17 @@ yarn test      # Run unit tests
 ### Movement & Performance
 - **All movement is right-to-left** (Waves, Payloads)
 - **Constant 60 FPS** rendering rate regardless of game events
+- **Unidirectional mechanics** - everything moves left and never returns
 - Performance optimizations:
   - Noise texture pre-calculation (one-time at startup)
-  - Color string caching for empty cells
+  - Color string caching with size limit (500 entries max)
   - Being color cache (maxDistance lookup)
   - Batch rendering by color (reduces `fillStyle` calls)
   - Deterministic Being body generation (no per-frame recalculation)
+  - Throttled mouse movement (50ms)
+  - Payload position map (O(1) lookups)
+- Memory leak prevention:
+  - Color cache limited to 500 entries (clears oldest 100 when full)
+  - Payload count capped at 500 (prevents unbounded growth)
+  - Old consumeTime timestamps cleaned up after fade completes
+  - Payloads removed immediately when off-screen (col < -1)

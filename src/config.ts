@@ -21,8 +21,9 @@ export const CONFIG = {
   BEING_MIN_DIGITS: 7,
   BEING_MAX_VALUE: 9999999999, // 10 digits
   BEINGS_COUNT: 100,
-  BEING_BODY_MIN_SIZE: 8, // Min cells in Being body
-  BEING_BODY_MAX_SIZE: 18, // Max cells in Being body
+  BEING_BODY_MIN_SIZE: 1, // Min cells in Being body (1 = just center)
+  BEING_BODY_MAX_SIZE: 20, // Max cells in Being body
+  BEING_SINGLE_CELL_CHANCE: 0.15, // 15% chance of single-cell Being
   BEING_GROWTH_MIN_INTERVAL: 1000, // 1 second
   BEING_GROWTH_MAX_INTERVAL: 10000, // 10 seconds
   BEING_GROWTH_MIN_POINTS: 0,
@@ -52,6 +53,7 @@ export const CONFIG = {
   BEING_CONSUME_FADE_DURATION: 5000, // 5 seconds yellow fade
   PAYLOAD_BLOB_MIN_SIZE: 1, // Min cells in blob
   PAYLOAD_BLOB_MAX_SIZE: 10, // Max cells in blob
+  PAYLOAD_MAX_COUNT: 500, // Maximum number of payloads to prevent memory leaks
   RANDOM_PAYLOAD_PROBABILITY: 0.001, // ~1/1000 chance per frame (~1 every 17 seconds at 60fps)
   RANDOM_PAYLOAD_MIN_VALUE: 20,
   RANDOM_PAYLOAD_MAX_VALUE: 150,

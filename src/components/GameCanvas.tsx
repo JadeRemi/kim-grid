@@ -72,42 +72,68 @@ function GameCanvas() {
         const centerCol = noiseValues[i * maxAttempts + attempts].col
         const beingId = `being-${i}`
         
-        // Generate solid blob-shaped body (deterministic, no gaps)
-        const bodySize = CONFIG.BEING_BODY_MIN_SIZE + 
-          Math.floor(noise[centerRow][centerCol] * (CONFIG.BEING_BODY_MAX_SIZE - CONFIG.BEING_BODY_MIN_SIZE + 1))
+        // Decide if this should be a single-cell Being
+        const isSingleCell = noise[centerRow][centerCol] < CONFIG.BEING_SINGLE_CELL_CHANCE
         
-        // Create solid blob by taking all cells within a certain distance
-        // Use a slightly random radius based on noise to create organic shapes
-        // Increased thickness with larger search radius
-        const baseRadius = Math.sqrt(bodySize / Math.PI) * 1.15 // +15% thickness
+        let bodyCells: { row: number; col: number; distance: number }[]
         
-        const potentialCells: { row: number; col: number; distance: number }[] = []
-        
-        for (let dr = -Math.ceil(baseRadius * 1.6); dr <= Math.ceil(baseRadius * 1.6); dr++) {
-          for (let dc = -Math.ceil(baseRadius * 1.6); dc <= Math.ceil(baseRadius * 1.6); dc++) {
-            const row = centerRow + dr
-            const col = centerCol + dc
-            const distance = Math.sqrt(dr * dr + dc * dc)
-            
-            if (row >= 0 && row < CONFIG.GRID_ROWS &&
-                col >= 0 && col < CONFIG.GRID_COLS) {
+        if (isSingleCell) {
+          // Single-cell Being (just the center)
+          bodyCells = [{ row: centerRow, col: centerCol, distance: 0 }]
+        } else {
+          // Generate asymmetric blob-shaped body with more variety
+          // Use modulo to keep indices within bounds
+          const altRow = centerCol % CONFIG.GRID_ROWS
+          const altCol = centerRow % CONFIG.GRID_COLS
+          const sizeNoise = (noise[centerRow][centerCol] * 137 + noise[altRow][altCol] * 211) % 1
+          const bodySize = Math.floor(CONFIG.BEING_BODY_MIN_SIZE + 
+            sizeNoise * (CONFIG.BEING_BODY_MAX_SIZE - CONFIG.BEING_BODY_MIN_SIZE + 1))
+          
+          const potentialCells: { row: number; col: number; distance: number }[] = []
+          
+          // Create highly asymmetric shapes using multiple noise functions
+          const baseRadius = Math.sqrt(bodySize / Math.PI)
+          const searchRadius = Math.ceil(baseRadius * 2.0)
+          
+          for (let dr = -searchRadius; dr <= searchRadius; dr++) {
+            for (let dc = -searchRadius; dc <= searchRadius; dc++) {
+              const row = centerRow + dr
+              const col = centerCol + dc
+              const distance = Math.sqrt(dr * dr + dc * dc)
               
-              // Create organic blob shape: vary radius based on angle and noise
-              const angle = Math.atan2(dr, dc)
-              const angleNoise = (noise[row][col] - 0.5) * 0.35 // Increased variation
-              const radiusAtAngle = baseRadius * (1 + Math.sin(angle * 3) * 0.25 + angleNoise)
-              
-              // Include all cells within this organic radius for solid blob
-              if (distance <= radiusAtAngle) {
-                potentialCells.push({ row, col, distance })
+              if (row >= 0 && row < CONFIG.GRID_ROWS &&
+                  col >= 0 && col < CONFIG.GRID_COLS) {
+                
+                // Create highly irregular shapes using multiple noise layers
+                const angle = Math.atan2(dr, dc)
+                const cellNoise = noise[row][col]
+                
+                // Multiple noise frequencies for organic, asymmetric shapes
+                const lowFreq = Math.sin(angle * 2) * 0.4
+                const midFreq = Math.sin(angle * 5 + cellNoise * 10) * 0.3
+                const highFreq = (cellNoise - 0.5) * 0.5
+                
+                // Combine for highly variable radius at each angle
+                const radiusVariation = lowFreq + midFreq + highFreq
+                const radiusAtAngle = baseRadius * (0.7 + radiusVariation)
+                
+                // Random acceptance for even more irregularity
+                const acceptChance = 0.85 + cellNoise * 0.15
+                
+                if (distance <= radiusAtAngle && Math.random() < acceptChance) {
+                  potentialCells.push({ row, col, distance })
+                }
               }
             }
           }
+          
+          // Sort by distance and take cells, but with some randomness
+          potentialCells.sort((a, b) => {
+            const distDiff = a.distance - b.distance
+            return distDiff + (Math.random() - 0.5) * 0.3 // Add slight randomness to sorting
+          })
+          bodyCells = potentialCells.slice(0, Math.min(bodySize, potentialCells.length))
         }
-        
-        // Sort by distance and take exact bodySize (creates solid blob)
-        potentialCells.sort((a, b) => a.distance - b.distance)
-        const bodyCells = potentialCells.slice(0, Math.min(bodySize, potentialCells.length))
         
         // Check if this Being would touch any existing Being (including adjacency)
         let wouldTouch = false
@@ -156,16 +182,28 @@ function GameCanvas() {
               noise[centerRow][centerCol] * (CONFIG.BEING_GROWTH_MAX_INTERVAL - CONFIG.BEING_GROWTH_MIN_INTERVAL)
           })
           
-          // Mark body cells in grid with gradient values
-          const medianEmptyValue = (CONFIG.EMPTY_MIN_VALUE + CONFIG.EMPTY_MAX_VALUE) / 2
-          
+          // Mark body cells in grid with HIGH values (7-10 digits range)
           bodyCells.forEach(cell => {
             const isCenter = cell.row === centerRow && cell.col === centerCol
             
-            // Calculate cell value based on distance (center = centerValue, edge = medianEmptyValue)
-            const distanceRatio = cell.distance / maxDistance
-            const cellValue = isCenter ? centerValue : 
-              Math.floor(centerValue - (centerValue - medianEmptyValue) * distanceRatio)
+            let cellValue: number
+            if (isCenter) {
+              cellValue = centerValue
+            } else {
+              // Body cells have 50-95% of center value based on distance
+              // This keeps them all in the 7-10 digit range
+              const distanceRatio = cell.distance / maxDistance
+              const minPercentage = 0.50 // Edge cells are at least 50% of center
+              const maxPercentage = 0.95 // Closest cells are up to 95% of center
+              const basePercentage = maxPercentage - (maxPercentage - minPercentage) * distanceRatio
+              
+              // Add significant variation to break up uniform rings (±20% variation)
+              const cellNoise = noise[cell.row][cell.col]
+              const variation = (cellNoise - 0.5) * 0.4 // ±20%
+              
+              const finalPercentage = Math.max(0.3, Math.min(0.98, basePercentage + variation))
+              cellValue = Math.floor(centerValue * finalPercentage)
+            }
             
             grid[cell.row][cell.col] = {
               type: 'being',
@@ -186,8 +224,9 @@ function GameCanvas() {
     return grid
   }, [])
 
-  // Color gradient cache
+  // Color gradient cache with size limit to prevent memory leaks
   const colorCacheRef = useRef<Map<number, string>>(new Map())
+  const COLOR_CACHE_MAX_SIZE = 500 // Limit cache to prevent unbounded growth
   
   // Being color cache - maps beingId to maxDistance for faster lookups
   const beingColorCacheRef = useRef<Map<string, number>>(new Map())
@@ -203,14 +242,8 @@ function GameCanvas() {
     }
     
     if (cell.type === 'being') {
-      // Yellow fade effect if recently consumed payload
-      if (cell.consumeTime && timestamp - cell.consumeTime < CONFIG.BEING_CONSUME_FADE_DURATION) {
-        const fadeProgress = (timestamp - cell.consumeTime) / CONFIG.BEING_CONSUME_FADE_DURATION
-        const r = Math.floor(CONFIG.COLOR_BEING_FADE_R + (CONFIG.COLOR_BEING_R - CONFIG.COLOR_BEING_FADE_R) * fadeProgress)
-        const g = Math.floor(CONFIG.COLOR_BEING_FADE_G + (CONFIG.COLOR_BEING_G - CONFIG.COLOR_BEING_FADE_G) * fadeProgress)
-        const b = Math.floor(CONFIG.COLOR_BEING_FADE_B + (CONFIG.COLOR_BEING_B - CONFIG.COLOR_BEING_FADE_B) * fadeProgress)
-        return `rgb(${r}, ${g}, ${b})`
-      }
+      // Calculate base color first (based on distance and value)
+      let baseR: number, baseG: number, baseB: number
       
       // Gradient from center (orange) to edge based on BOTH distance and value
       if (cell.beingDistance !== undefined && !cell.isBeingCenter && cell.beingId) {
@@ -227,33 +260,55 @@ function GameCanvas() {
         if (maxDistance !== undefined) {
           const distanceRatio = cell.beingDistance / maxDistance
           
-          // Calculate value-based variation (cells with different values have different colors)
-          // Normalize displayValue relative to the Being's value range
-          const medianEmptyValue = (CONFIG.EMPTY_MIN_VALUE + CONFIG.EMPTY_MAX_VALUE) / 2
-          const valueRange = cell.baseValue - medianEmptyValue
-          const maxValueRange = Math.max(100000, cell.baseValue) // Approximate max value for normalization
-          const valueRatio = Math.min(1, valueRange / maxValueRange)
+          // Calculate value-based variation for more color diversity
+          const valuePercentage = cell.baseValue / Math.max(cell.baseValue, 10000000) // Normalize to 0-1
+          const valueVariation = (valuePercentage - 0.5) * 0.2 // ±10% variation based on value
           
           // Combine distance and value for color variation
-          // Distance controls overall brightness, value adds local variation
-          const colorFactor = distanceRatio * 0.7 + valueRatio * 0.3
+          // Distance controls overall brightness (darker edges), value adds local variation
+          const colorFactor = Math.min(1, distanceRatio + valueVariation)
           
-          // Brighter target color (more orange, less gray) for better visibility
-          // Instead of gray, use a warm orange-brown as the edge color
-          const edgeR = 180  // Brighter, more orange than gray
-          const edgeG = 110  // Warmer tone
-          const edgeB = 60   // Keeps orange hue
+          // Darker edges for better contrast and gradient visibility
+          const edgeR = 110  // Much darker edges
+          const edgeG = 60   // Dark brown-orange
+          const edgeB = 30   // Keeps warm hue
           
-          const r = Math.floor(CONFIG.COLOR_BEING_R - (CONFIG.COLOR_BEING_R - edgeR) * colorFactor)
-          const g = Math.floor(CONFIG.COLOR_BEING_G - (CONFIG.COLOR_BEING_G - edgeG) * colorFactor)
-          const b = Math.floor(CONFIG.COLOR_BEING_B - (CONFIG.COLOR_BEING_B - edgeB) * colorFactor)
-          
-          return `rgb(${r}, ${g}, ${b})`
+          baseR = Math.floor(CONFIG.COLOR_BEING_R - (CONFIG.COLOR_BEING_R - edgeR) * colorFactor)
+          baseG = Math.floor(CONFIG.COLOR_BEING_G - (CONFIG.COLOR_BEING_G - edgeG) * colorFactor)
+          baseB = Math.floor(CONFIG.COLOR_BEING_B - (CONFIG.COLOR_BEING_B - edgeB) * colorFactor)
+        } else {
+          // Fallback to center color
+          baseR = CONFIG.COLOR_BEING_R
+          baseG = CONFIG.COLOR_BEING_G
+          baseB = CONFIG.COLOR_BEING_B
         }
+      } else {
+        // Center cell gets full orange
+        baseR = CONFIG.COLOR_BEING_R
+        baseG = CONFIG.COLOR_BEING_G
+        baseB = CONFIG.COLOR_BEING_B
       }
       
-      // Center cell gets full orange
-      return `rgb(${CONFIG.COLOR_BEING_R}, ${CONFIG.COLOR_BEING_G}, ${CONFIG.COLOR_BEING_B})`
+      // Yellow fade effect if recently consumed payload
+      // Blend base color towards yellow proportionally
+      if (cell.consumeTime && timestamp - cell.consumeTime < CONFIG.BEING_CONSUME_FADE_DURATION) {
+        const fadeProgress = (timestamp - cell.consumeTime) / CONFIG.BEING_CONSUME_FADE_DURATION
+        // fadeProgress: 0 = just consumed (brightest yellow), 1 = fade complete (base color)
+        
+        // Lighten each cell's base color towards yellow, maintaining relative brightness
+        // Each cell blends from its base color to a brightened yellow version
+        const yellowR = Math.min(255, baseR + (CONFIG.COLOR_BEING_FADE_R - baseR) * 0.6)
+        const yellowG = Math.min(255, baseG + (CONFIG.COLOR_BEING_FADE_G - baseG) * 0.6)
+        const yellowB = Math.min(255, baseB + (CONFIG.COLOR_BEING_FADE_B - baseB) * 0.4)
+        
+        const r = Math.floor(yellowR + (baseR - yellowR) * fadeProgress)
+        const g = Math.floor(yellowG + (baseG - yellowG) * fadeProgress)
+        const b = Math.floor(yellowB + (baseB - yellowB) * fadeProgress)
+        
+        return `rgb(${r}, ${g}, ${b})`
+      }
+      
+      return `rgb(${baseR}, ${baseG}, ${baseB})`
     } else {
       if (isHovered) {
         return `rgb(${CONFIG.COLOR_EMPTY_HOVER_R}, ${CONFIG.COLOR_EMPTY_HOVER_G}, ${CONFIG.COLOR_EMPTY_HOVER_B})`
@@ -270,6 +325,14 @@ function GameCanvas() {
       const b = Math.floor(CONFIG.COLOR_EMPTY_MIN_B + (CONFIG.COLOR_EMPTY_MAX_B - CONFIG.COLOR_EMPTY_MIN_B) * t)
       
       const color = `rgb(${r}, ${g}, ${b})`
+      
+      // Limit cache size to prevent memory leaks
+      if (colorCacheRef.current.size >= COLOR_CACHE_MAX_SIZE) {
+        // Clear oldest entries (first 100) when cache is full
+        const keysToDelete = Array.from(colorCacheRef.current.keys()).slice(0, 100)
+        keysToDelete.forEach(key => colorCacheRef.current.delete(key))
+      }
+      
       colorCacheRef.current.set(displayValue, color)
       return color
     }
@@ -302,6 +365,9 @@ function GameCanvas() {
   
   const spawnRandomPayloads = useCallback(() => {
     if (!gridRef.current) return
+    
+    // Limit total payload count to prevent memory leaks
+    if (payloadsRef.current.length >= CONFIG.PAYLOAD_MAX_COUNT) return
     
     // Randomly spawn single-cell payloads from the right edge
     if (Math.random() < CONFIG.RANDOM_PAYLOAD_PROBABILITY) {
@@ -342,8 +408,8 @@ function GameCanvas() {
       payload.targetCol -= CONFIG.PAYLOAD_SPEED
       payload.col = Math.floor(payload.targetCol)
       
-      // Check if reached left edge
-      if (payload.col < 0) {
+      // Check if reached left edge (remove payloads that left the screen)
+      if (payload.col < -1 || payload.targetCol < -1) {
         toRemove.push(i)
         continue
       }
@@ -356,10 +422,36 @@ function GameCanvas() {
           // Find the Being
           const being = beingsRef.current.find(b => b.id === cell.beingId)
           if (being) {
-            // Consume payload
+            // Consume payload - add payload value to Being's value
+            being.value = Math.min(being.value + payload.value, CONFIG.BEING_MAX_VALUE)
             being.consumeTime = timestamp
-            // Update all body cells
+            
+            // Update all body cells with new values and consume timestamp
+            const maxDistance = being.bodyCells.length > 0 ? being.bodyCells[being.bodyCells.length - 1].distance : 1
+            
             being.bodyCells.forEach(bc => {
+              const isCenter = bc.row === being.centerRow && bc.col === being.centerCol
+              
+              let cellValue: number
+              if (isCenter) {
+                cellValue = being.value
+              } else {
+                // Body cells have 50-95% of center value based on distance
+                const distanceRatio = bc.distance / maxDistance
+                const minPercentage = 0.50
+                const maxPercentage = 0.95
+                const basePercentage = maxPercentage - (maxPercentage - minPercentage) * distanceRatio
+                
+                // Add deterministic variation (±20%)
+                const variationSeed = (bc.row * 7919 + bc.col * 6551) % 1000 / 1000
+                const variation = (variationSeed - 0.5) * 0.4
+                
+                const finalPercentage = Math.max(0.3, Math.min(0.98, basePercentage + variation))
+                cellValue = Math.floor(being.value * finalPercentage)
+              }
+              
+              gridRef.current![bc.row][bc.col].value = cellValue
+              gridRef.current![bc.row][bc.col].baseValue = cellValue
               gridRef.current![bc.row][bc.col].consumeTime = timestamp
             })
             toRemove.push(i)
@@ -376,6 +468,12 @@ function GameCanvas() {
             })
             
             // Find all adjacent empty cells to the Being's body (excluding right side)
+            // Only spawn split payloads if we haven't hit the payload limit
+            if (payloads.length >= CONFIG.PAYLOAD_MAX_COUNT) {
+              toRemove.push(i)
+              continue
+            }
+            
             const adjacentEmptyCells: { row: number; col: number }[] = []
             const checked = new Set<string>()
             
@@ -431,6 +529,17 @@ function GameCanvas() {
     if (!gridRef.current) return
     
     beingsRef.current.forEach(being => {
+      // Clean up old consumeTime to prevent memory issues
+      if (being.consumeTime && timestamp - being.consumeTime >= CONFIG.BEING_CONSUME_FADE_DURATION) {
+        being.consumeTime = undefined
+        // Clean up grid cell consumeTime as well
+        being.bodyCells.forEach(bc => {
+          if (gridRef.current![bc.row][bc.col].consumeTime) {
+            gridRef.current![bc.row][bc.col].consumeTime = undefined
+          }
+        })
+      }
+      
       if (timestamp - being.lastGrowthTime >= being.nextGrowthDelay) {
         // Determine growth points (more likely to be 0)
         const rand = Math.random()
@@ -446,17 +555,32 @@ function GameCanvas() {
         being.nextGrowthDelay = CONFIG.BEING_GROWTH_MIN_INTERVAL + 
           Math.random() * (CONFIG.BEING_GROWTH_MAX_INTERVAL - CONFIG.BEING_GROWTH_MIN_INTERVAL)
         
-        // Update all body cells proportionally
+        // Update all body cells proportionally with HIGH values
         const maxDistance = being.bodyCells.length > 0 ? being.bodyCells[being.bodyCells.length - 1].distance : 1
-        const medianEmptyValue = (CONFIG.EMPTY_MIN_VALUE + CONFIG.EMPTY_MAX_VALUE) / 2
         
         being.bodyCells.forEach(bc => {
           const isCenter = bc.row === being.centerRow && bc.col === being.centerCol
-          const distanceRatio = bc.distance / maxDistance
-          const cellValue = isCenter ? being.value : 
-            Math.floor(being.value - (being.value - medianEmptyValue) * distanceRatio)
+          
+          let cellValue: number
+          if (isCenter) {
+            cellValue = being.value
+          } else {
+            // Body cells have 50-95% of center value based on distance
+            const distanceRatio = bc.distance / maxDistance
+            const minPercentage = 0.50
+            const maxPercentage = 0.95
+            const basePercentage = maxPercentage - (maxPercentage - minPercentage) * distanceRatio
+            
+            // Add deterministic variation (±20%)
+            const variationSeed = (bc.row * 7919 + bc.col * 6551) % 1000 / 1000
+            const variation = (variationSeed - 0.5) * 0.4
+            
+            const finalPercentage = Math.max(0.3, Math.min(0.98, basePercentage + variation))
+            cellValue = Math.floor(being.value * finalPercentage)
+          }
           
           gridRef.current![bc.row][bc.col].value = cellValue
+          gridRef.current![bc.row][bc.col].baseValue = cellValue
         })
       }
     })
@@ -478,11 +602,11 @@ function GameCanvas() {
     const noiseTexture = noiseTextureRef.current
     const textureWidth = noiseTexture[0]?.length || 0
     
-    // Create payload position map for quick lookup
-    const payloadMap = new Set<string>()
+    // Create payload position map for quick lookup (use Map for O(1) value access)
+    const payloadMap = new Map<string, Payload>()
     payloadsRef.current.forEach(p => {
       if (p.col >= 0 && p.col < CONFIG.GRID_COLS) {
-        payloadMap.add(`${p.row},${p.col}`)
+        payloadMap.set(`${p.row},${p.col}`, p)
       }
     })
     
@@ -493,36 +617,33 @@ function GameCanvas() {
       for (let col = 0; col < CONFIG.GRID_COLS; col++) {
         const cell = gridRef.current[row][col]
         
-        // Check if payload is on this cell
-        const hasPayload = payloadMap.has(`${row},${col}`)
+        // Check if payload is on this cell (O(1) lookup)
+        const payload = payloadMap.get(`${row},${col}`)
         let payloadValue = 0
         
         // Calculate display value
         let displayValue = cell.baseValue
         
         // Add payload value if present
-        if (hasPayload) {
-          const payload = payloadsRef.current.find(p => p.row === row && Math.floor(p.targetCol) === col)
-          if (payload) {
-            displayValue += payload.value
-            payloadValue = payload.value
-          }
+        if (payload) {
+          displayValue += payload.value
+          payloadValue = payload.value
         }
         
         // Continuous scrolling noise for empty cells
-        if (cell.type === 'empty' && textureWidth > 0 && !hasPayload) {
+        if (cell.type === 'empty' && textureWidth > 0 && !payload && noiseTexture[row]) {
           // Sample from pre-calculated noise texture
           const texCol = (col + noiseOffset) % textureWidth
           const noiseValue = noiseTexture[row][texCol]
           
           // Only apply wave effect if noise is above threshold
-          if (noiseValue > CONFIG.WAVE_THRESHOLD) {
+          if (noiseValue !== undefined && noiseValue > CONFIG.WAVE_THRESHOLD) {
             const waveIntensity = (noiseValue - CONFIG.WAVE_THRESHOLD) / (1 - CONFIG.WAVE_THRESHOLD)
             const waveBoost = CONFIG.WAVE_MIN_VALUE + 
               waveIntensity * (CONFIG.WAVE_PEAK_VALUE - CONFIG.WAVE_MIN_VALUE)
             displayValue = Math.floor(cell.baseValue + waveBoost)
           }
-        } else if (cell.type === 'being' && !hasPayload) {
+        } else if (cell.type === 'being' && !payload) {
           displayValue = cell.value
         }
         
@@ -638,6 +759,9 @@ function GameCanvas() {
       const clickRow = Math.floor(y / CONFIG.CELL_HEIGHT)
       
       if (clickCol >= 0 && clickCol < CONFIG.GRID_COLS && clickRow >= 0 && clickRow < CONFIG.GRID_ROWS) {
+        // Limit total payload count to prevent memory leaks
+        if (payloadsRef.current.length >= CONFIG.PAYLOAD_MAX_COUNT) return
+        
         // Create round blob of payloads (1-10 cells) with gradient values
         const blobSize = CONFIG.PAYLOAD_BLOB_MIN_SIZE + 
           Math.floor(Math.random() * (CONFIG.PAYLOAD_BLOB_MAX_SIZE - CONFIG.PAYLOAD_BLOB_MIN_SIZE + 1))
